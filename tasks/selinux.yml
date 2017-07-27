@@ -1,0 +1,30 @@
+---
+# task file for selinux
+
+- name: copy selinux zabbix-proxy modules
+  copy: src=./selinux/{{ item }}.pp
+        dest=/tmp/{{ item }}.pp
+        owner=root
+        group=root
+        mode=0640
+  with_items:
+      - zabbix-setrlimit
+  tags: selinux
+
+- name: install zabbix-proxy selinux modules
+  shell: /usr/sbin/semodule -i /tmp/{{ item }}.pp
+  with_items:
+      - zabbix-setrlimit
+  tags: selinux
+
+- name: remove zabbix-proxy selinux modules file
+  file: path=/tmp/{{ item }}.pp
+        state=absent
+  with_items:
+      - zabbix-setrlimit
+  tags: selinux
+
+- name: set selinux boolean zabbix_can_network on
+  seboolean: name=zabbix_can_network state=yes persistent=yes
+  tags: selinux
+

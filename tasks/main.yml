@@ -97,6 +97,10 @@
     - config
     - include
 
+- name: "Install selinux modules"
+  include: "selinux.yml"
+  when: ansible_os_family == "RedHat"
+
 - name: "Make sure the zabbix-agent service is running"
   service: name=zabbix-agent
            state=started
