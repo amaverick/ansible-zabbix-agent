@@ -1,11 +1,17 @@
 ---
 # tasks file for wdijkerman.zabbix
 
-- name: "Set short version name"
+- name: "Fix facts for linuxmint - distribution release"
   set_fact:
-      zabbix_short_version: "{{ zabbix_version | regex_replace('\\.', '') }}"
-  tags:
-    - always
+    ansible_distribution_release: xenial
+  when:
+    - ansible_os_family == "Linuxmint"
+    - ansible_distribution_release == "sonya" or ansible_distribution_release == "serena"
+
+- name: "Fix facts for linuxmint - family"
+  set_fact:
+    ansible_os_family: Debian
+  when: ansible_os_family == "Linuxmint"
 
 - name: "Include OS-specific variables"
   include_vars: "{{ ansible_os_family }}.yml"
@@ -14,7 +20,8 @@
 
 - name: "Install the correct repository"
   include: "RedHat.yml"
-  when: ansible_os_family == "RedHat"
+  when:
+    - ansible_os_family == "RedHat"
   tags:
     - zabbix-agent
     - init
@@ -23,7 +30,8 @@
 
 - name: "Install the correct repository"
   include: "Debian.yml"
-  when: ansible_os_family == "Debian"
+  when:
+    - ansible_os_family == "Debian"
   tags:
     - zabbix-agent
     - init
@@ -32,26 +40,38 @@
 
 - name: "Install the correct repository"
   include: "Suse.yml"
-  when: ansible_os_family == "Suse"
+  when:
+    - ansible_os_family == "Suse"
   tags:
     - zabbix-agent
     - init
     - config
     - service
 
+- name: "Set default ip address for zabbix_agent_ip"
+  set_fact:
+    zabbix_agent_ip: "{{ hostvars[inventory_hostname]['ansible_default_ipv4'].address }}"
+  when:
+    - zabbix_agent_ip is not defined
+    - "'ansible_default_ipv4' in hostvars[inventory_hostname]"
+
 - name: "Fail invalid specified agent_listeninterface"
   fail:
     msg: "The specified network interface does not exist"
-  when: "agent_listeninterface and (agent_listeninterface not in ansible_interfaces)"
+  when:
+    - zabbix_agent_listeninterface
+    - (zabbix_agent_listeninterface not in ansible_all_ipv4_addresses)
   tags:
     - zabbix-agent
     - config
 
 - name: "Get IP of agent_listeninterface when no agent_listenip specified"
   set_fact:
-    agent_listenip: "{{ hostvars[inventory_hostname]['ansible_' + agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
-    agent_ip: "{{ hostvars[inventory_hostname]['ansible_' + agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
-  when: "agent_listeninterface and not agent_listenip"
+    zabbix_agent_listenip: "{{ hostvars[inventory_hostname]['ansible_' + zabbix_agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
+    zabbix_agent_ip: "{{ hostvars[inventory_hostname]['ansible_' + zabbix_agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
+  when:
+    - zabbix_agent_listeninterface
+    - not zabbix_agent_listenip
   tags:
     - zabbix-agent
     - config
@@ -59,9 +79,9 @@
 
 - name: "Default agent_listenip to all when not specified"
   set_fact:
-    agent_listenip: '0.0.0.0'
-    agent_ip: "{{ hostvars[inventory_hostname]['ansible_default_ipv4'].address }}"
-  when: "not agent_listenip"
+    zabbix_agent_listenip: '0.0.0.0'
+  when:
+    - not zabbix_agent_listenip
   tags:
     - zabbix-agent
     - config
@@ -69,48 +89,21 @@
 - name: "Fail invalid specified agent_listenip"
   fail:
     msg: "The agent_listenip does not exist"
-  when: "agent_listenip != '0.0.0.0' and agent_listenip not in ansible_all_ipv4_addresses"
+  when:
+    - zabbix_agent_listenip != '0.0.0.0'
+    - zabbix_agent_listenip != '127.0.0.1'
+    - (zabbix_agent_listenip not in ansible_all_ipv4_addresses)
   tags:
     - zabbix-agent
     - config
 
-- name: "Allow zabbix_agent to start (SELinux)"
-  selinux_permissive:
-    name: zabbix_agent_t
-    permissive: true
-  when: zabbix_selinux
+- name: "Install the correct repository"
+  include: Windows.yml
+  when: ansible_os_family == "Windows"
 
-- name: "Configure zabbix-agent"
-  template: src=zabbix_agentd.conf.j2
-            dest=/etc/zabbix/zabbix_agentd.conf
-            owner=root
-            group=root
-            mode=0644
-  notify: restart zabbix-agent
-  become: yes
-  tags:
-    - zabbix-agent
-    - config
-    - init
-
-- name: "Create include dir zabbix-agent"
-  file: path={{ agent_include }}
-        owner=root
-        group=root
-        state=directory
-  become: yes
-  tags:
-    - config
-    - include
-
-- name: "Make sure the zabbix-agent service is running"
-  service: name=zabbix-agent
-           state=started
-           enabled=yes
-  become: yes
-  tags:
-    - init
-    - service
+- name: "Install the correct repository"
+  include: Linux.yml
+  when: ansible_os_family != "Windows"
 
 - name: "Create hostgroups"
   local_action:
@@ -120,8 +113,8 @@
     login_password: "{{ zabbix_api_pass }}"
     host_group: "{{ zabbix_host_groups }}"
     state: "{{ zabbix_create_hostgroup }}"
-  when: zabbix_api_create_hostgroup
-  run_once: True
+  when:
+    - zabbix_api_create_hostgroup
   become: no
   tags:
     - api
@@ -132,15 +125,26 @@
     server_url: "{{ zabbix_url }}"
     login_user: "{{ zabbix_api_user }}"
     login_password: "{{ zabbix_api_pass }}"
-    host_name: "{{ agent_hostname }}"
+    host_name: "{{ zabbix_agent_hostname }}"
     host_groups: "{{ zabbix_host_groups }}"
     link_templates: "{{ zabbix_link_templates }}"
     status: "{{ zabbix_host_status }}"
     state: "{{ zabbix_create_host }}"
+    force: "{{ zabbix_update_host }}"
     proxy: "{{ zabbix_proxy }}"
-    interfaces: "{{ agent_interfaces }}"
-  when: zabbix_api_create_hosts
+    inventory_mode: "{{ zabbix_inventory_mode }}"
+    interfaces: "{{ zabbix_agent_interfaces }}"
+    visible_name: "{{ zabbix_visible_hostname|default(zabbix_agent_hostname) }}"
+    tls_psk: "{{ zabbix_agent_tlspsk_secret|default(omit) }}"
+    tls_psk_identity: "{{ zabbix_agent_tlspskidentity|default(omit) }}"
+    tls_issuer: "{{ zabbix_agent_tlsservercertissuer|default(omit) }}"
+    tls_subject: "{{ zabbix_agent_tlsservercertsubject|default(omit) }}"
+    tls_connect: "{{ {'unencrypted': '1', 'psk': '2', 'cert' : '4'}[zabbix_agent_tlsaccept if zabbix_agent_tlsaccept else 'unencrypted'] }}"
+    tls_accept: "{{ {'unencrypted': '1', 'psk': '2', 'cert' : '4'}[zabbix_agent_tlsconnect if zabbix_agent_tlsconnect else 'unencrypted'] }}"
+  when:
+    - zabbix_api_create_hosts
   become: no
+  changed_when: false
   tags:
     - api
 
@@ -150,12 +154,20 @@
     server_url: "{{ zabbix_url }}"
     login_user: "{{ zabbix_api_user }}"
     login_password: "{{ zabbix_api_pass }}"
-    host_name: "{{ agent_hostname }}"
+    host_name: "{{ zabbix_agent_hostname }}"
     macro_name: "{{ item.macro_key }}"
     macro_value: "{{ item.macro_value }}"
   with_items: "{{ zabbix_macros | default([]) }}"
-  when: zabbix_macros is defined and
-        item.macro_key is defined
+  when:
+    - zabbix_macros is defined
+    - item.macro_key is defined
   become: no
   tags:
     - api
+
+- name: "Including userparameters"
+  include: "userparameter.yml"
+  when: zabbix_agent_userparameters|length > 0
+  tags:
+    - zabbix-agent
+    - userparameter
